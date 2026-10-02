@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Dando Wholesale Catalogue</title>
+
+<style>
+  :root { --accent: #d62828; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #22252b; font-family: Arial, Helvetica, sans-serif; overflow: hidden; }
+
+  /* ===== BUTTONS EMBEDDED ON THE BOOK ITSELF =====
+     This overlay is NOT fixed to the browser viewport — it is synced in
+     JS to the exact on-screen rectangle of #book, so the buttons sit
+     right on top of the open book (like the printed "SHOP NOW" graphic
+     used to) and move/scale with it as the book resizes, instead of
+     floating in a separate toolbar above the page. */
+  #book-overlay {
+    position: absolute; top: 0; left: 0; width: 0; height: 0;
+    pointer-events: none; z-index: 500;
+  }
+  #book-overlay .ov-btn {
+    position: absolute; top: 10px;
+    pointer-events: auto;
+    font-weight: 700; letter-spacing: .5px;
+    border-radius: 30px; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0,0,0,.45);
+    transition: transform .15s, background .15s;
+    white-space: nowrap;
+  }
+  #lang-toggle {
+    left: 10px;
+    background: #fff; color: #22252b; border: 2px solid #22252b;
+    font-size: 13px; padding: 8px 14px;
+  }
+  #lang-toggle:hover { transform: scale(1.06); background: #eee; }
+  #shop-now {
+    right: 10px;
+    background: var(--accent); color: #fff; text-decoration: none;
+    border: none; font-size: 14px; padding: 10px 22px;
+    display: inline-block;
+  }
+  #shop-now:hover { transform: scale(1.06); background: #b71f1f; }
+
+  /* ===== FLIPBOOK AREA ===== */
+  #stage { position: absolute; inset: 16px 0 70px 0; display: flex; align-items: center; justify-content: center; }
+  #book { position: relative; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+  .page { position: relative; width: 100%; height: 100%; background: #fff; overflow: hidden; }
+  .page img { width: 100%; height: 100%; display: block; pointer-events: none; -webkit-user-drag: none; }
+
+  /* ===== CONTROLS ===== */
+  #controls {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 14px; align-items: center; z-index: 9000;
+    background: rgba(0,0,0,.55); padding: 8px 16px; border-radius: 30px; color: #fff; font-size: 14px;
+  }
+  #controls button {
+    background: #fff; color: #222; border: 0; width: 36px; height: 36px;
+    border-radius: 50%; font-size: 18px; cursor: pointer;
+  }
+  #controls button:hover { background: #ddd; }
+
+  /* ===== LOADER ===== */
+  #loader {
+    position: fixed; inset: 0; z-index: 9500; background: #22252b; color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  }
+  #loader-logo {
+    width: 160px; height: auto; margin-bottom: 4px;
+    animation: loader-bounce 1.4s ease-in-out infinite;
+    filter: drop-shadow(0 6px 18px rgba(0,0,0,.5));
+  }
+  @keyframes loader-bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+  }
+  #bar-wrap { width: 240px; height: 6px; background: #444; border-radius: 3px; overflow: hidden; }
+  #bar { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  #error { color: #ff8a8a; max-width: 80%; text-align: center; display: none; }
+</style>
+</head>
+<body>
+
+<div id="loader">
+  <img id="loader-logo" src="assets/dandodo-logo.png" alt="Dan-Do">
+  <div id="loader-text">Loading catalogue…</div>
+  <div id="bar-wrap"><div id="bar"></div></div>
+  <div id="error"></div>
+</div>
+
+<div id="stage">
+  <div id="book"></div>
+  <div id="book-overlay">
+    <button id="lang-toggle" class="ov-btn" type="button" aria-label="Switch language">FRANÇAIS</button>
+    <a id="shop-now" class="ov-btn" href="https://www.dandosports.com" target="_blank" rel="noopener noreferrer">Shop Now</a>
+  </div>
+</div>
+
+<div id="controls">
+  <button id="prev" aria-label="Previous page">&#8249;</button>
+  <span id="indicator">1 / 1</span>
+  <button id="next" aria-label="Next page">&#8250;</button>
+</div>
+
+<script src="vendor/page-flip.js"></script>
+
+<script>
+  const TOTAL_PAGES = 35;
+  const PAGE_URL = (lang, i) => "pages/" + lang + "/page-" + String(i).padStart(2, "0") + ".jpg";
+  const PAGE_W = 1400, PAGE_H = 1812; // native render size of every page image
+
+  const loader = document.getElementById("loader");
+  const loaderText = document.getElementById("loader-text");
+  const errBox = document.getElementById("error");
+  const bar = document.getElementById("bar");
+  const indicator = document.getElementById("indicator");
+  const book = document.getElementById("book");
+  const bookOverlay = document.getElementById("book-overlay");
+  const stageEl = document.getElementById("stage");
+  const langToggle = document.getElementById("lang-toggle");
+
+  let lang = "en"; // current language: "en" or "fr"
+  let flip = null;
+
+  // Keeps the button overlay locked to the book's on-screen rectangle so
+  // the buttons stay visually "on" the page instead of floating above it.
+  function syncOverlayToBook() {
+    const stageRect = stageEl.getBoundingClientRect();
+    const bookRect = book.getBoundingClientRect();
+    bookOverlay.style.left = (bookRect.left - stageRect.left) + "px";
+    bookOverlay.style.top = (bookRect.top - stageRect.top) + "px";
+    bookOverlay.style.width = bookRect.width + "px";
+    bookOverlay.style.height = bookRect.height + "px";
+  }
+
+  function showError(msg) {
+    errBox.style.display = "block";
+    errBox.textContent = msg;
+  }
+
+  function preload(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("Failed to load " + url));
+      img.src = url;
+    });
+  }
+
+  function buildPage(i) {
+    const div = document.createElement("div");
+    div.className = "page";
+    if (i === 1 || i === TOTAL_PAGES) div.dataset.density = "hard";
+
+    const img = document.createElement("img");
+    img.src = PAGE_URL(lang, i);
+    img.alt = "Page " + i;
+    img.draggable = false;
+    img.dataset.pageIndex = i;
+    div.appendChild(img);
+
+    return div;
+  }
+
+  async function preloadAll(targetLang) {
+    for (let i = 1; i <= TOTAL_PAGES; i++) {
+      await preload(PAGE_URL(targetLang, i));
+    }
+  }
+
+  async function init() {
+    loaderText.textContent = "Loading catalogue…";
+    for (let i = 1; i <= TOTAL_PAGES; i++) {
+      await preload(PAGE_URL(lang, i));
+      book.appendChild(buildPage(i));
+      bar.style.width = Math.round((i / TOTAL_PAGES) * 100) + "%";
+    }
+
+    const isMobile = window.innerWidth < 700;
+    const stage = document.getElementById("stage");
+    const availW = stage.clientWidth;
+    const availH = stage.clientHeight;
+    const ratio = PAGE_W / PAGE_H;
+
+    let pw = Math.min(availH * ratio, (isMobile ? availW : availW / 2));
+    let ph = pw / ratio;
+
+    flip = new St.PageFlip(book, {
+      width: Math.round(pw),
+      height: Math.round(ph),
+      size: "fixed",
+      showCover: true,
+      usePortrait: isMobile,
+      maxShadowOpacity: 0.5,
+      drawShadow: true,
+      flippingTime: 800,
+      mobileScrollSupport: false,
+      useMouseEvents: true,
+      clickEventForward: true,
+      showPageCorners: false
+    });
+
+    flip.loadFromHTML(document.querySelectorAll("#book .page"));
+
+    const update = () => {
+      indicator.textContent = (flip.getCurrentPageIndex() + 1) + " / " + TOTAL_PAGES;
+    };
+    flip.on("flip", update);
+    update();
+
+    document.getElementById("prev").onclick = () => flip.flipPrev();
+    document.getElementById("next").onclick = () => flip.flipNext();
+    document.addEventListener("keydown", e => {
+      if (e.key === "ArrowLeft") flip.flipPrev();
+      if (e.key === "ArrowRight") flip.flipNext();
+    });
+
+    syncOverlayToBook();
+    window.addEventListener("resize", syncOverlayToBook);
+
+    loader.style.display = "none";
+  }
+
+  async function switchLanguage() {
+    const targetLang = lang === "en" ? "fr" : "en";
+    langToggle.disabled = true;
+    const prevLabel = langToggle.textContent;
+    langToggle.textContent = "…";
+
+    try {
+      // Preload the target language's images before swapping, so the
+      // page-turn never shows a half-loaded/blank page.
+      await preloadAll(targetLang);
+
+      const currentIndex = flip ? flip.getCurrentPageIndex() : 0;
+      lang = targetLang;
+
+      document.querySelectorAll("#book .page img").forEach(img => {
+        const i = img.dataset.pageIndex;
+        img.src = PAGE_URL(lang, i);
+      });
+
+      langToggle.textContent = lang === "en" ? "FRANÇAIS" : "ENGLISH";
+
+      // Restore the reader to the same page they were on.
+      if (flip) flip.turnToPage(currentIndex);
+    } catch (err) {
+      console.error(err);
+      langToggle.textContent = prevLabel;
+    } finally {
+      langToggle.disabled = false;
+    }
+  }
+
+  // Keep the toggle from ever triggering the flip library's drag / hover
+  // "page corner peek" behaviour, exactly like the original Shop Now fix:
+  // the library listens for mousedown/touchstart (drag start) and plain
+  // mousemove/touchmove (corner peek) on the whole window, so these must
+  // be stopped from bubbling past the button itself.
+  ["mousedown", "touchstart", "pointerdown", "mousemove", "touchmove", "pointermove"].forEach(evt => {
+    langToggle.addEventListener(evt, e => e.stopPropagation());
+    document.getElementById("shop-now").addEventListener(evt, e => e.stopPropagation());
+  });
+
+  langToggle.addEventListener("click", e => {
+    e.stopPropagation();
+    switchLanguage();
+  });
+
+  init().catch(err => {
+    console.error(err);
+    showError("Could not load the catalogue pages. Please refresh the page.");
+  });
+</script>
+</body>
+</html>
