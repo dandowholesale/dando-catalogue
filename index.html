@@ -230,11 +230,11 @@
     flip.on("flip", update);
     update();
 
-    document.getElementById("prev").onclick = () => flip.flipPrev();
-    document.getElementById("next").onclick = () => flip.flipNext();
+    document.getElementById("prev").onclick = () => go(-1);
+    document.getElementById("next").onclick = () => go(1);
     document.addEventListener("keydown", e => {
-      if (e.key === "ArrowLeft") flip.flipPrev();
-      if (e.key === "ArrowRight") flip.flipNext();
+      if (e.key === "ArrowLeft") go(-1);
+      if (e.key === "ArrowRight") go(1);
     });
 
     syncOverlayToBook();
@@ -258,6 +258,29 @@
     document.getElementById("shop-now").addEventListener(evt, e => e.stopPropagation());
   });
 
+
+  // Page turning. When zoomed (the phone full-screen view) the curl animation
+  // flickers on some phones because the book is a huge scaled layer, so use a
+  // quick fade between pages instead. Normal view keeps the page-curl.
+  let going = false;
+  function go(dir) {
+    if (!flip) return;
+    if (zs <= 1.001) { dir > 0 ? flip.flipNext() : flip.flipPrev(); return; }
+    if (going) return;
+    const cur = flip.getCurrentPageIndex(), n = flip.getPageCount();
+    const target = Math.min(n - 1, Math.max(0, cur + dir));
+    if (target === cur) return;
+    going = true;
+    book.style.transition = "opacity .12s";
+    book.style.opacity = "0";
+    setTimeout(() => {
+      flip.turnToPage(target);
+      requestAnimationFrame(() => {
+        book.style.opacity = "1";
+        setTimeout(() => { book.style.transition = ""; going = false; }, 140);
+      });
+    }, 130);
+  }
 
   // ===== ZOOM =====
   // The catalogue pages are portrait (about 3:4) while phones are much
@@ -357,8 +380,8 @@
     if (had && tapStart && ptrs.size === 0 && flip && e.type === "pointerup") {
       const dx = e.clientX - tapStart.x, dy = e.clientY - tapStart.y;
       if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-        if (dx > 0 && (tapStart.edge === "L" || tapStart.edge === "B")) flip.flipPrev();
-        else if (dx < 0 && (tapStart.edge === "R" || tapStart.edge === "B")) flip.flipNext();
+        if (dx > 0 && (tapStart.edge === "L" || tapStart.edge === "B")) go(-1);
+        else if (dx < 0 && (tapStart.edge === "R" || tapStart.edge === "B")) go(1);
       }
     }
     // double-tap while zoomed = back to normal size
