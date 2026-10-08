@@ -2,7 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a56a8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Dando Catalogue">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Dando Wholesale Catalogue</title>
 
 <style>
@@ -29,12 +37,6 @@
     transition: transform .15s, background .15s;
     white-space: nowrap;
   }
-  #lang-toggle {
-    left: 10px;
-    background: #fff; color: #22252b; border: 2px solid #22252b;
-    font-size: 13px; padding: 8px 14px;
-  }
-  #lang-toggle:hover { transform: scale(1.06); background: #eee; }
   #shop-now {
     right: 10px;
     background: var(--accent); color: #fff; text-decoration: none;
@@ -54,12 +56,27 @@
     position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
     display: flex; gap: 14px; align-items: center; z-index: 9000;
     background: rgba(0,0,0,.55); padding: 8px 16px; border-radius: 30px; color: #fff; font-size: 14px;
+    width: max-content; white-space: nowrap;
   }
+  #indicator { min-width: 52px; text-align: center; }
   #controls button {
     background: #fff; color: #222; border: 0; width: 36px; height: 36px;
     border-radius: 50%; font-size: 18px; cursor: pointer;
   }
   #controls button:hover { background: #ddd; }
+  #controls button svg { display: block; margin: auto; }
+
+  /* ===== ZOOM (lets phone users enlarge the page) ===== */
+  #book { transform-origin: 50% 50%; }
+  #zoom-layer {
+    position: fixed; inset: 0; z-index: 8000; display: none;
+    touch-action: none; cursor: grab; -webkit-user-select: none; user-select: none;
+  }
+  #zoom-layer:active { cursor: grabbing; }
+  body.zoomed #zoom-layer { display: block; }
+  body.zoomed #book-overlay { display: none; }
+  /* clip the enlarged page to the viewing area so it can't stretch the page layout */
+  body.zoomed #stage { overflow: hidden; }
 
   /* ===== LOADER ===== */
   #loader {
@@ -92,15 +109,17 @@
 <div id="stage">
   <div id="book"></div>
   <div id="book-overlay">
-    <button id="lang-toggle" class="ov-btn" type="button" aria-label="Switch language">FRANÇAIS</button>
     <a id="shop-now" class="ov-btn" href="https://www.dandowholesale.com" target="_blank" rel="noopener noreferrer">Shop Now</a>
   </div>
 </div>
+
+<div id="zoom-layer"></div>
 
 <div id="controls">
   <button id="prev" aria-label="Previous page">&#8249;</button>
   <span id="indicator">1 / 1</span>
   <button id="next" aria-label="Next page">&#8250;</button>
+  <button id="zoom-btn" type="button" aria-label="Zoom in" title="Zoom in"></button>
 </div>
 
 <script src="vendor/page-flip.js"></script>
@@ -118,7 +137,6 @@
   const book = document.getElementById("book");
   const bookOverlay = document.getElementById("book-overlay");
   const stageEl = document.getElementById("stage");
-  const langToggle = document.getElementById("lang-toggle");
 
   let lang = "en"; // current language: "en" or "fr"
   let flip = null;
@@ -161,12 +179,6 @@
     div.appendChild(img);
 
     return div;
-  }
-
-  async function preloadAll(targetLang) {
-    for (let i = 1; i <= TOTAL_PAGES; i++) {
-      await preload(PAGE_URL(targetLang, i));
-    }
   }
 
   async function init() {
@@ -217,55 +229,134 @@
     });
 
     syncOverlayToBook();
-    window.addEventListener("resize", syncOverlayToBook);
+    window.addEventListener("resize", () => { if (zs > 1) applyZoom(); else syncOverlayToBook(); });
+
+    // Restore the page the reader was on if the screen was rotated.
+    try {
+      const saved = parseInt(sessionStorage.getItem("dando-page"), 10);
+      sessionStorage.removeItem("dando-page");
+      if (saved > 0) flip.turnToPage(saved);
+    } catch (e) {}
 
     loader.style.display = "none";
   }
 
-  async function switchLanguage() {
-    const targetLang = lang === "en" ? "fr" : "en";
-    langToggle.disabled = true;
-    const prevLabel = langToggle.textContent;
-    langToggle.textContent = "…";
-
-    try {
-      // Preload the target language's images before swapping, so the
-      // page-turn never shows a half-loaded/blank page.
-      await preloadAll(targetLang);
-
-      const currentIndex = flip ? flip.getCurrentPageIndex() : 0;
-      lang = targetLang;
-
-      document.querySelectorAll("#book .page img").forEach(img => {
-        const i = img.dataset.pageIndex;
-        img.src = PAGE_URL(lang, i);
-      });
-
-      langToggle.textContent = lang === "en" ? "FRANÇAIS" : "ENGLISH";
-
-      // Restore the reader to the same page they were on.
-      if (flip) flip.turnToPage(currentIndex);
-    } catch (err) {
-      console.error(err);
-      langToggle.textContent = prevLabel;
-    } finally {
-      langToggle.disabled = false;
-    }
-  }
-
-  // Keep the toggle from ever triggering the flip library's drag / hover
-  // "page corner peek" behaviour, exactly like the original Shop Now fix:
-  // the library listens for mousedown/touchstart (drag start) and plain
-  // mousemove/touchmove (corner peek) on the whole window, so these must
-  // be stopped from bubbling past the button itself.
+  // Keep the Shop Now button from triggering the flip library's drag / hover
+  // "page corner peek" behaviour: the library listens for mousedown/touchstart
+  // and mousemove/touchmove on the whole window, so stop them at the button.
   ["mousedown", "touchstart", "pointerdown", "mousemove", "touchmove", "pointermove"].forEach(evt => {
-    langToggle.addEventListener(evt, e => e.stopPropagation());
     document.getElementById("shop-now").addEventListener(evt, e => e.stopPropagation());
   });
 
-  langToggle.addEventListener("click", e => {
-    e.stopPropagation();
-    switchLanguage();
+
+  // ===== ZOOM =====
+  // The catalogue pages are portrait (about 3:4) while phones are much
+  // taller and narrower, so on a phone the page is already as wide as the
+  // screen allows. Zoom lets the reader enlarge it to fill the screen:
+  // pinch with two fingers, double-tap, or use the magnifier button; drag
+  // to move around while zoomed. Tap the button again to go back.
+  const zoomBtn = document.getElementById("zoom-btn");
+  const zoomLayer = document.getElementById("zoom-layer");
+  const ICON_PLUS = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#222" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M10.5 7.5v6M7.5 10.5h6"/></svg>';
+  const ICON_MINUS = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#222" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M7.5 10.5h6"/></svg>';
+  const ZOOM_MAX = 4, ZOOM_START = 2.2;
+  let zs = 1, ztx = 0, zty = 0;
+
+  function applyZoom() {
+    const sr = stageEl.getBoundingClientRect();
+    const maxX = Math.max(0, (book.offsetWidth * zs - sr.width) / 2);
+    const maxY = Math.max(0, (book.offsetHeight * zs - sr.height) / 2);
+    ztx = Math.min(maxX, Math.max(-maxX, ztx));
+    zty = Math.min(maxY, Math.max(-maxY, zty));
+    const zoomed = zs > 1.001;
+    if (!zoomed) { zs = 1; ztx = 0; zty = 0; }
+    book.style.transform = zoomed ? "translate(" + ztx + "px," + zty + "px) scale(" + zs + ")" : "";
+    document.body.classList.toggle("zoomed", zoomed);
+    zoomBtn.innerHTML = zoomed ? ICON_MINUS : ICON_PLUS;
+    zoomBtn.setAttribute("aria-label", zoomed ? "Reset zoom" : "Zoom in");
+    zoomBtn.title = zoomed ? "Reset zoom" : "Zoom in";
+    if (!zoomed) syncOverlayToBook();
+  }
+
+  // Zoom to a new scale while keeping the screen point (mx, my) fixed.
+  function zoomAbout(newScale, mx, my) {
+    newScale = Math.min(ZOOM_MAX, Math.max(1, newScale));
+    const sr = stageEl.getBoundingClientRect();
+    const cx = sr.left + sr.width / 2, cy = sr.top + sr.height / 2;
+    const k = newScale / zs;
+    ztx = (mx - cx) - ((mx - cx) - ztx) * k;
+    zty = (my - cy) - ((my - cy) - zty) * k;
+    zs = newScale;
+    applyZoom();
+  }
+
+  function toggleZoom(mx, my) {
+    if (zs > 1.001) { zs = 1; applyZoom(); return; }
+    const sr = stageEl.getBoundingClientRect();
+    zoomAbout(ZOOM_START, mx == null ? sr.left + sr.width / 2 : mx, my == null ? sr.top + sr.height / 2 : my);
+  }
+
+  zoomBtn.innerHTML = ICON_PLUS;
+  zoomBtn.addEventListener("click", () => toggleZoom());
+  stageEl.addEventListener("dblclick", e => { if (zs === 1) toggleZoom(e.clientX, e.clientY); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && zs > 1) { zs = 1; applyZoom(); } });
+
+  const ptrs = new Map();
+  let tapStart = null, lastTap = 0;
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  zoomLayer.addEventListener("pointerdown", e => {
+    zoomLayer.setPointerCapture(e.pointerId);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    tapStart = ptrs.size === 1 ? { x: e.clientX, y: e.clientY, t: Date.now() } : null;
+  });
+  zoomLayer.addEventListener("pointermove", e => {
+    const prev = ptrs.get(e.pointerId);
+    if (!prev) return;
+    const cur = { x: e.clientX, y: e.clientY };
+    if (ptrs.size === 1) {
+      ztx += cur.x - prev.x; zty += cur.y - prev.y;
+      ptrs.set(e.pointerId, cur);
+      applyZoom();
+    } else if (ptrs.size === 2) {
+      const other = [...ptrs.entries()].find(([id]) => id !== e.pointerId)[1];
+      const d0 = dist(prev, other), d1 = dist(cur, other);
+      const m0 = { x: (prev.x + other.x) / 2, y: (prev.y + other.y) / 2 };
+      const m1 = { x: (cur.x + other.x) / 2, y: (cur.y + other.y) / 2 };
+      ptrs.set(e.pointerId, cur);
+      ztx += m1.x - m0.x; zty += m1.y - m0.y;
+      if (d0 > 0) zoomAbout(zs * d1 / d0, m1.x, m1.y); else applyZoom();
+    }
+  });
+  const endPtr = e => {
+    const had = ptrs.delete(e.pointerId);
+    // double-tap while zoomed = back to normal size
+    if (had && tapStart && ptrs.size === 0 &&
+        Date.now() - tapStart.t < 250 && Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) < 8) {
+      if (Date.now() - lastTap < 350) { zs = 1; applyZoom(); lastTap = 0; }
+      else lastTap = Date.now();
+    }
+  };
+  zoomLayer.addEventListener("pointerup", endPtr);
+  zoomLayer.addEventListener("pointercancel", endPtr);
+  zoomLayer.addEventListener("wheel", e => {
+    e.preventDefault();
+    zoomAbout(zs * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
+  }, { passive: false });
+
+  // The book is sized once at load, so if a phone is rotated (or the window
+  // is resized a lot) reload at the new size, keeping the current page.
+  let lastW = window.innerWidth, lastH = window.innerHeight, rt = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(rt);
+    rt = setTimeout(() => {
+      const w = window.innerWidth, h = window.innerHeight;
+      const rotated = (w > h) !== (lastW > lastH);
+      if (rotated || Math.abs(w - lastW) > 150) {
+        try { if (flip) sessionStorage.setItem("dando-page", String(flip.getCurrentPageIndex())); } catch (e) {}
+        location.reload();
+      }
+      lastW = w; lastH = h;
+    }, 500);
   });
 
   init().catch(err => {
