@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1a56a8">
+<meta name="theme-color" content="#0a2e6a">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Dando Catalogue">
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png">
-<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest?v=2">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png?v=2">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=2">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=2">
 <title>Dando Wholesale Catalogue</title>
 
 <style>
@@ -48,6 +48,11 @@
   /* ===== FLIPBOOK AREA ===== */
   #stage { position: absolute; inset: 16px 0 70px 0; display: flex; align-items: center; justify-content: center; }
   #book { position: relative; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+  @media (max-width: 699px) {
+    html, body { background: #0a2e6a; }
+    #stage { inset: 0 0 64px 0; }
+    #book { box-shadow: none; }
+  }
   .page { position: relative; width: 100%; height: 100%; background: #fff; overflow: hidden; }
   .page img { width: 100%; height: 100%; display: block; pointer-events: none; -webkit-user-drag: none; }
 
