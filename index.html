@@ -50,8 +50,12 @@
   #book { position: relative; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
   @media (max-width: 699px) {
     html, body { background: #0a2e6a; }
-    #stage { inset: 0 0 64px 0; }
+    #stage { inset: 0; }
     #book { box-shadow: none; }
+    /* full-screen mode: keep Shop Now visible at top-right of the screen */
+    body.zoomed #book-overlay { display: block !important; position: fixed; left: 0 !important; top: 0 !important; width: 100vw !important; height: 0 !important; z-index: 8500; }
+    body.zoomed #shop-now { top: calc(10px + env(safe-area-inset-top)); font-size: 13px; padding: 9px 18px; }
+    #controls { bottom: calc(14px + env(safe-area-inset-bottom)); }
   }
   .page { position: relative; width: 100%; height: 100%; background: #fff; overflow: hidden; }
   .page img { width: 100%; height: 100%; display: block; pointer-events: none; -webkit-user-drag: none; }
@@ -244,6 +248,7 @@
     } catch (e) {}
 
     loader.style.display = "none";
+    startFill();
   }
 
   // Keep the Shop Now button from triggering the flip library's drag / hover
@@ -295,10 +300,20 @@
     applyZoom();
   }
 
+  // On phones: the scale at which the page fills the whole screen height.
+  function fillScale() {
+    if (window.innerWidth >= 700) return 0;
+    return Math.min(ZOOM_MAX, stageEl.clientHeight / book.offsetHeight);
+  }
+  function startFill() {
+    const f = fillScale();
+    if (f > 1.02) { zs = f; ztx = 0; zty = 0; applyZoom(); }
+  }
+
   function toggleZoom(mx, my) {
     if (zs > 1.001) { zs = 1; applyZoom(); return; }
     const sr = stageEl.getBoundingClientRect();
-    zoomAbout(ZOOM_START, mx == null ? sr.left + sr.width / 2 : mx, my == null ? sr.top + sr.height / 2 : my);
+    zoomAbout(fillScale() || ZOOM_START, mx == null ? sr.left + sr.width / 2 : mx, my == null ? sr.top + sr.height / 2 : my);
   }
 
   zoomBtn.innerHTML = ICON_PLUS;
@@ -313,6 +328,10 @@
     zoomLayer.setPointerCapture(e.pointerId);
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     tapStart = ptrs.size === 1 ? { x: e.clientX, y: e.clientY, t: Date.now() } : null;
+    if (tapStart) {
+      const mx = Math.max(0, (book.offsetWidth * zs - stageEl.getBoundingClientRect().width) / 2);
+      tapStart.edge = mx > 0 && ztx >= mx - 1 ? "L" : (mx > 0 && ztx <= -mx + 1 ? "R" : (mx === 0 ? "B" : ""));
+    }
   });
   zoomLayer.addEventListener("pointermove", e => {
     const prev = ptrs.get(e.pointerId);
@@ -334,6 +353,14 @@
   });
   const endPtr = e => {
     const had = ptrs.delete(e.pointerId);
+    // swipe to turn the page when the page is already panned to its edge
+    if (had && tapStart && ptrs.size === 0 && flip && e.type === "pointerup") {
+      const dx = e.clientX - tapStart.x, dy = e.clientY - tapStart.y;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        if (dx > 0 && (tapStart.edge === "L" || tapStart.edge === "B")) flip.flipPrev();
+        else if (dx < 0 && (tapStart.edge === "R" || tapStart.edge === "B")) flip.flipNext();
+      }
+    }
     // double-tap while zoomed = back to normal size
     if (had && tapStart && ptrs.size === 0 &&
         Date.now() - tapStart.t < 250 && Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) < 8) {
